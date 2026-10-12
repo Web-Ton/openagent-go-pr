@@ -120,13 +120,14 @@ type SessionConfig struct {
 	MinCommitInterval time.Duration
 }
 
-// assistantMemoryPolicy is the memory_policy sent at session creation.
-// self=false: the agent is an assistant — don't extract into the session
-// owner's scope. peer=true: extract into the user's (peer) scope so
-// memories are attributed to the user, not the agent.
-var assistantMemoryPolicy = map[string]any{
-	"self": map[string]any{"enabled": false},
-	"peer": map[string]any{"enabled": true},
+// selfMemoryPolicy is the memory_policy sent at session creation.
+// self=true: extract into the session owner's own scope
+// (user/{user_id}/memories — user/default/memories for the default
+// account), matching DSH. peer=false: never attribute knowledge to a
+// peer.
+var selfMemoryPolicy = map[string]any{
+	"self": map[string]any{"enabled": true},
+	"peer": map[string]any{"enabled": false},
 }
 
 // NewClient creates a client in legacy mode (no session reuse). Each
@@ -426,7 +427,7 @@ func (c *Client) Remember(ctx context.Context, content string) (string, error) {
 		return c.legacyRemember(ctx, content)
 	}
 	ovSID := c.SessionIDFor("")
-	if _, err := c.AddMessage(ctx, "assistant", content, "", ovSID); err != nil {
+	if _, err := c.AddMessage(ctx, "user", content, ovSID); err != nil {
 		return "", err
 	}
 	if err := c.MaybeCommit(ctx, ovSID); err != nil {
@@ -481,23 +482,17 @@ func (c *Client) SessionIDFor(conversationID string) string {
 // If the session has expired (404), it is recreated and the call is
 // retried once.
 //
-// peerID is attached to the message for memory attribution (per-message,
-// not per-session). Pass the user's identity so OV's VLM extracts
-// memories into that peer's scope; an empty peerID leaves user-role
-// content with no extraction target under the assistant memory_policy.
-//
 // role follows OV's extraction contract: "user"-role content is the
 // source for user memories (profile/preferences/entities/events);
 // "assistant"-role content only feeds agent-scope types (cases/skills).
-func (c *Client) AddMessage(ctx context.Context, role, content, peerID, ovSessionID string) (int, error) {
-	return c.AddMessages(ctx, []MessagePayload{{Role: role, Content: content, PeerID: peerID}}, ovSessionID)
+func (c *Client) AddMessage(ctx context.Context, role, content, ovSessionID string) (int, error) {
+	return c.AddMessages(ctx, []MessagePayload{{Role: role, Content: content}}, ovSessionID)
 }
 
 // MessagePayload is one message in an AddMessages batch.
 type MessagePayload struct {
 	Role    string // "user" | "assistant"
 	Content string
-	PeerID  string // optional attribution; user messages carry the peer
 }
 
 // AddMessages appends multiple messages to the OV session in a single
@@ -544,11 +539,7 @@ func (c *Client) doAddMessages(ctx context.Context, msgs []MessagePayload, ovSes
 
 	raw := make([]any, 0, len(msgs))
 	for _, m := range msgs {
-		msg := map[string]any{"role": m.Role, "content": m.Content}
-		if m.PeerID != "" {
-			msg["peer_id"] = m.PeerID
-		}
-		raw = append(raw, msg)
+		raw = append(raw, map[string]any{"role": m.Role, "content": m.Content})
 	}
 	var resp struct {
 		PendingTokens int `json:"pending_tokens"`
@@ -708,7 +699,7 @@ func (c *Client) RecoverUncommitted(ctx context.Context) error {
 // ovSessionID. On first call it tries GET /sessions/{id}; if the session
 // exists (previous process crashed or restarted), its server-reported
 // counters seed the local state so thresholds keep counting. If 404, it
-// creates a new session with the assistant memory_policy. Subsequent
+// creates a new session with the self memory_policy. Subsequent
 // calls are no-ops.
 func (c *Client) ensureSession(ctx context.Context, ovSessionID string) error {
 	c.sessMu.Lock()
@@ -756,13 +747,13 @@ func (c *Client) ensureSession(ctx context.Context, ovSessionID string) error {
 	return fmt.Errorf("openviking ensure session: %w", err)
 }
 
-// createSession creates a new OV session with the assistant memory_policy.
+// createSession creates a new OV session with the self memory_policy.
 // AlreadyExists is tolerated (another process or goroutine created it
 // concurrently).
 func (c *Client) createSession(ctx context.Context, ovSessionID string) error {
 	body := map[string]any{
 		"session_id":    ovSessionID,
-		"memory_policy": assistantMemoryPolicy,
+		"memory_policy": selfMemoryPolicy,
 	}
 	err := c.doJSON(ctx, http.MethodPost, "/api/v1/sessions", nil, body, nil)
 	if err != nil && !isAlreadyExists(err) {

@@ -50,7 +50,7 @@ func TestMaybeCommit_IntervalSeededFromServer(t *testing.T) {
 			})
 			ovSID := client.SessionIDFor("conv-1")
 
-			_, err := client.AddMessage(context.Background(), "assistant", "msg", "", ovSID)
+			_, err := client.AddMessage(context.Background(), "assistant", "msg", ovSID)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -298,5 +298,35 @@ func TestCommitResponse_TaskIDLoggedShape(t *testing.T) {
 	}
 	if len(gotBody) != 1 {
 		t.Errorf("commit body has extra fields: %v", gotBody)
+	}
+}
+
+// TestRemember_SessionReuseUsesUserRole: the deprecated Remember, in
+// session-reuse mode, stores knowledge as a user-role message (matching
+// Store and legacyRemember) so OV sources it as a user memory, not an
+// agent-scope case. No peer_id is attached.
+func TestRemember_SessionReuseUsesUserRole(t *testing.T) {
+	srv := newSessionMockServer()
+	defer srv.Close()
+
+	client, _ := NewClientWithSession(srv.URL, "", SessionConfig{
+		SessionIDSeed: "/test/config",
+	})
+
+	if _, err := client.Remember(context.Background(), "likes terraform"); err != nil {
+		t.Fatal(err)
+	}
+
+	srv.mu.Lock()
+	defer srv.mu.Unlock()
+	if len(srv.addMsgBodies) != 1 {
+		t.Fatalf("add_message count = %d, want 1", len(srv.addMsgBodies))
+	}
+	msg := srv.addMsgBodies[0]["messages"].([]any)[0].(map[string]any)
+	if msg["role"] != "user" {
+		t.Errorf("role = %v, want user", msg["role"])
+	}
+	if _, hasPeerID := msg["peer_id"]; hasPeerID {
+		t.Errorf("message must not carry peer_id, got %v", msg["peer_id"])
 	}
 }
