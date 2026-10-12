@@ -10,8 +10,8 @@ import (
 
 // TestConversationSyncer_RoleFilter: only user and assistant text
 // messages pass; system / tool / pure-tool-call assistant turns are
-// dropped. User messages carry the peer attribution; assistant messages
-// do not.
+// dropped. Neither user nor assistant messages carry peer attribution —
+// memories land in the session owner's own scope (user/{user_id}/memories).
 func TestConversationSyncer_RoleFilter(t *testing.T) {
 	srv := newSessionMockServer()
 	defer srv.Close()
@@ -40,8 +40,11 @@ func TestConversationSyncer_RoleFilter(t *testing.T) {
 		t.Fatalf("messages in batch = %d, want 2 (user + assistant text only)", len(msgs))
 	}
 	m0 := msgs[0].(map[string]any)
-	if m0["role"] != "user" || m0["peer_id"] != "alice" {
-		t.Errorf("msg[0] = %v, want user role with peer_id=alice", m0)
+	if m0["role"] != "user" {
+		t.Errorf("msg[0] role = %v, want user", m0["role"])
+	}
+	if _, hasPeerID := m0["peer_id"]; hasPeerID {
+		t.Errorf("user message must not carry peer_id, got %v", m0["peer_id"])
 	}
 	m1 := msgs[1].(map[string]any)
 	if m1["role"] != "assistant" {
@@ -52,10 +55,10 @@ func TestConversationSyncer_RoleFilter(t *testing.T) {
 	}
 }
 
-// TestConversationSyncer_DefaultPeerID: empty scope.UserID falls back
-// to the default peer so user-role content still has an extraction
-// target.
-func TestConversationSyncer_DefaultPeerID(t *testing.T) {
+// TestConversationSyncer_NoUserIDStillNoPeerID: an empty scope.UserID
+// (local CLI/TUI session) still produces messages without peer_id — the
+// memory lands in the owner's own scope, never a synthesized peer.
+func TestConversationSyncer_NoUserIDStillNoPeerID(t *testing.T) {
 	srv := newSessionMockServer()
 	defer srv.Close()
 
@@ -73,8 +76,8 @@ func TestConversationSyncer_DefaultPeerID(t *testing.T) {
 		t.Fatalf("batch requests = %d, want 1", len(srv.addMsgBodies))
 	}
 	msg := srv.addMsgBodies[0]["messages"].([]any)[0].(map[string]any)
-	if msg["peer_id"] != defaultPeerID {
-		t.Errorf("peer_id = %v, want fallback %q", msg["peer_id"], defaultPeerID)
+	if _, hasPeerID := msg["peer_id"]; hasPeerID {
+		t.Errorf("user message must not carry peer_id, got %v", msg["peer_id"])
 	}
 }
 

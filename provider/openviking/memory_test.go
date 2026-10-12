@@ -549,12 +549,11 @@ func TestStore_MinInterval(t *testing.T) {
 	}
 }
 
-// TestStore_PeerIDAndRole: add_message includes peer_id from scope.UserID
-// and role="user" — OV's extraction contract sources user memories
-// (profile/preferences/entities/events) from user-role content only;
-// assistant-role content feeds agent-scope types the assistant
-// memory_policy disables.
-func TestStore_PeerIDAndRole(t *testing.T) {
+// TestStore_RoleUserAndNoPeerID: a stored user memory is sent as a
+// user-role message WITHOUT peer_id — memories belong to the session
+// owner's own scope (user/{user_id}/memories), matching DSH. The scope
+// UserID must not become a peer attribution.
+func TestStore_RoleUserAndNoPeerID(t *testing.T) {
 	srv := newSessionMockServer()
 	defer srv.Close()
 
@@ -579,16 +578,15 @@ func TestStore_PeerIDAndRole(t *testing.T) {
 	if msg["role"] != "user" {
 		t.Errorf("role = %v, want user", msg["role"])
 	}
-	if msg["peer_id"] != "alice@example.com" {
-		t.Errorf("peer_id = %v, want alice@example.com", msg["peer_id"])
+	if _, hasPeerID := msg["peer_id"]; hasPeerID {
+		t.Errorf("user message must not carry peer_id, got %v", msg["peer_id"])
 	}
 }
 
-// TestStore_DefaultPeerID: an empty scope.UserID (local CLI/TUI session)
-// falls back to the default peer so extraction still has a target —
-// without a peer_id, user-role knowledge is silently dropped under the
-// assistant memory_policy.
-func TestStore_DefaultPeerID(t *testing.T) {
+// TestStore_NoUserIDStillNoPeerID: an empty scope.UserID (local CLI/TUI
+// session) is stored without peer_id too — the memory still lands in the
+// owner's own scope, never a synthesized peer.
+func TestStore_NoUserIDStillNoPeerID(t *testing.T) {
 	srv := newSessionMockServer()
 	defer srv.Close()
 
@@ -609,8 +607,8 @@ func TestStore_DefaultPeerID(t *testing.T) {
 		t.Fatalf("add_message count = %d, want 1", len(srv.addMsgBodies))
 	}
 	msg := srv.addMsgBodies[0]["messages"].([]any)[0].(map[string]any)
-	if msg["peer_id"] != defaultPeerID {
-		t.Errorf("peer_id = %v, want fallback %q", msg["peer_id"], defaultPeerID)
+	if _, hasPeerID := msg["peer_id"]; hasPeerID {
+		t.Errorf("user message must not carry peer_id, got %v", msg["peer_id"])
 	}
 }
 
@@ -684,7 +682,7 @@ func TestStore_SessionNotFound(t *testing.T) {
 	})
 	ovSID := client.SessionIDFor("conv-1")
 
-	_, err := client.AddMessage(context.Background(), "assistant", "hello", "", ovSID)
+	_, err := client.AddMessage(context.Background(), "assistant", "hello", ovSID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -711,7 +709,7 @@ func TestStore_AddMessage404Retry(t *testing.T) {
 	})
 	ovSID := client.SessionIDFor("conv-1")
 
-	_, err := client.AddMessage(context.Background(), "assistant", "retry me", "", ovSID)
+	_, err := client.AddMessage(context.Background(), "assistant", "retry me", ovSID)
 	if err != nil {
 		t.Fatalf("AddMessage should succeed after retry, got: %v", err)
 	}
@@ -742,7 +740,7 @@ func TestStore_Flush(t *testing.T) {
 	// Store) to isolate the Flush trigger: Store would also call
 	// MaybeCommit, but since pending_tokens=100 < 30000, it's a no-op
 	// anyway — AddMessage alone is sufficient and more precise.
-	_, _ = mem.client.AddMessage(context.Background(), "assistant", "pending", "", ovSID)
+	_, _ = mem.client.AddMessage(context.Background(), "assistant", "pending", ovSID)
 
 	srv.mu.Lock()
 	if srv.commitCount != 0 {
@@ -764,7 +762,8 @@ func TestStore_Flush(t *testing.T) {
 }
 
 // TestStore_MemoryPolicyAtCreation: POST /sessions includes memory_policy
-// with self=false, peer=true (assistant role).
+// with self=true, peer=false — memories are extracted into the session
+// owner's own scope (user/{user_id}/memories), matching DSH.
 func TestStore_MemoryPolicyAtCreation(t *testing.T) {
 	// We need to capture the create body — extend the mock inline.
 	var createBody map[string]any
@@ -806,7 +805,7 @@ func TestStore_MemoryPolicyAtCreation(t *testing.T) {
 	})
 	ovSID := client.SessionIDFor("conv-1")
 
-	_, err := client.AddMessage(context.Background(), "assistant", "msg", "", ovSID)
+	_, err := client.AddMessage(context.Background(), "assistant", "msg", ovSID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -819,12 +818,12 @@ func TestStore_MemoryPolicyAtCreation(t *testing.T) {
 		t.Fatalf("memory_policy not in create body: %v", createBody)
 	}
 	self, ok := mp["self"].(map[string]any)
-	if !ok || self["enabled"] != false {
-		t.Errorf("memory_policy.self.enabled = %v, want false", self["enabled"])
+	if !ok || self["enabled"] != true {
+		t.Errorf("memory_policy.self.enabled = %v, want true", self["enabled"])
 	}
 	peer, ok := mp["peer"].(map[string]any)
-	if !ok || peer["enabled"] != true {
-		t.Errorf("memory_policy.peer.enabled = %v, want true", peer["enabled"])
+	if !ok || peer["enabled"] != false {
+		t.Errorf("memory_policy.peer.enabled = %v, want false", peer["enabled"])
 	}
 }
 

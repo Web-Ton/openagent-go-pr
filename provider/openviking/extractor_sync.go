@@ -38,7 +38,7 @@ func (s *ConversationSyncer) Extract(ctx context.Context, scope ctxpkg.ContextSc
 	if s == nil || s.client == nil || len(runDelta) == 0 {
 		return
 	}
-	payload := conversationPayload(runDelta, peerIDFor(scope))
+	payload := conversationPayload(runDelta)
 	if len(payload) == 0 {
 		return
 	}
@@ -54,12 +54,13 @@ func (s *ConversationSyncer) Extract(ctx context.Context, scope ctxpkg.ContextSc
 }
 
 // conversationPayload filters a run delta down to the text exchange:
-// user messages (peer-attributed) and assistant prose. System messages,
-// tool transport/result messages, and pure tool-call assistant turns
-// carry no conversation semantics for the VLM (and tool output is
-// bulky). Empty-content multimodal messages (image-only) are skipped —
-// the batch API's simple mode is text.
-func conversationPayload(runDelta []openagent.Message, peerID string) []MessagePayload {
+// user messages and assistant prose. System messages, tool
+// transport/result messages, and pure tool-call assistant turns carry no
+// conversation semantics for the VLM (and tool output is bulky).
+// Empty-content multimodal messages (image-only) are skipped — the batch
+// API's simple mode is text. Messages carry no peer_id: memories land in
+// the session owner's own scope.
+func conversationPayload(runDelta []openagent.Message) []MessagePayload {
 	payload := make([]MessagePayload, 0, len(runDelta))
 	for _, m := range runDelta {
 		if strings.TrimSpace(m.Content) == "" {
@@ -67,10 +68,8 @@ func conversationPayload(runDelta []openagent.Message, peerID string) []MessageP
 		}
 		switch m.Role {
 		case openagent.RoleUser:
-			payload = append(payload, MessagePayload{Role: "user", Content: m.Content, PeerID: peerID})
+			payload = append(payload, MessagePayload{Role: "user", Content: m.Content})
 		case openagent.RoleAssistant:
-			// No peer_id: assistant content is the agent's own voice —
-			// attribution belongs to the user messages.
 			payload = append(payload, MessagePayload{Role: "assistant", Content: m.Content})
 		}
 	}
